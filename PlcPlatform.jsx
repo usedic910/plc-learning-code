@@ -113,23 +113,35 @@ const useInterval = (fn, ms) => {
 const runPLCScan = (state) => {
   const next = { ...state };
 
+  const emergency = !!next["I1.0"];
+  const overload = !!next["I0.2"];
+  const stopPressed = !!next["I0.1"];
+  const resetPressed = !!next["I0.3"];
+
   // 网络 1: 起保停自锁 — Q0.0 = (I0.0 OR Q0.0) AND NOT I0.1
   // I0.0 启动按钮(NO) | I0.1 停止按钮(NC，物理按下=true→断开回路)
-  next["Q0.0"] = (next["I0.0"] || next["Q0.0"]) && !next["I0.1"];
+  // 允许 I0.3 做故障复位：当复位按钮按下且故障信号消失后可再次启动
+  const faultActive = emergency || overload;
+  next["M0.0"] = faultActive && !resetPressed;
+
+  next["Q0.0"] = (next["I0.0"] || next["Q0.0"]) && !stopPressed && !next["M0.0"];
 
   // 网络 2: 热继电器过载报警 — Q0.1 = I0.2
   // I0.2 接热继常开触点：正常=OFF，过载跳闸=ON → 驱动报警灯
-  next["Q0.1"] = !!next["I0.2"];
+  next["Q0.1"] = next["M0.0"];
 
   // 网络 3: 运行状态同步 — Q0.2 = Q0.0
   // 运行指示灯直接跟随接触器状态（简化，完整版需等待定时器 T1.DN）
-  next["Q0.2"] = next["Q0.0"];
+  next["Q0.2"] = next["Q0.0"] && !next["Q0.1"];
+
+  // 网络 4: 心跳指示灯（CPU RUN 时闪烁）
+  next["Q0.3"] = !next["Q0.3"];
 
   return next;
 };
 
 // ─── Top Bar ───────────────────────────────────────────────────────────────
-const TopBar = ({ scanCount, scanTime, running, onToggle }) => {
+const TopBar = ({ scanCount, scanTime, running, onToggle, scanInterval, onIntervalChange, onReset }) => {
   const [time, setTime] = useState(new Date());
   useInterval(() => setTime(new Date()), 1000);
 
@@ -169,6 +181,23 @@ const TopBar = ({ scanCount, scanTime, running, onToggle }) => {
         <StatusBadge label="扫描计数" value={scanCount.toLocaleString()} color="var(--amber)" />
         <StatusBadge label="CPU 状态" value={running ? "RUN" : "STOP"} color={running ? "var(--green)" : "var(--red)"} blink={!running} />
 
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {[50, 100, 200].map((ms) => (
+            <button key={ms} onClick={() => onIntervalChange(ms)} style={{
+              fontFamily: "var(--font-display)", fontSize: 10, padding: "4px 8px",
+              border: "1px solid var(--border)",
+              color: scanInterval === ms ? "var(--amber)" : "var(--text-dim)",
+              background: scanInterval === ms ? "var(--amber-glow)" : "transparent",
+              cursor: "pointer",
+            }}>{ms}ms</button>
+          ))}
+          <button onClick={onReset} style={{
+            fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 700,
+            padding: "6px 12px", border: "1px solid var(--border)", color: "var(--amber)",
+            background: "var(--bg-raised)", cursor: "pointer", letterSpacing: 1,
+          }}>RESET</button>
+        </div>
+
         <button onClick={onToggle} style={{
           fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 700,
           padding: "6px 20px", border: "1px solid",
@@ -205,6 +234,7 @@ const NAV_ITEMS = [
   { id: "memory", icon: "▦", label: "寄存器", sub: "Registers" },
   { id: "course", icon: "◈", label: "课程模块", sub: "Curriculum" },
   { id: "timing", icon: "◎", label: "时序图", sub: "Timing Diagram" },
+  { id: "diag",   icon: "⌬", label: "诊断日志", sub: "Diagnostics" },
 ];
 
 const Sidebar = ({ active, onChange }) => (
@@ -497,6 +527,7 @@ const IO_DEFS = [
   { addr: "Q0.0", tag: "KM1",       desc: "接触器 K1",  type: "DO", wiring: "Relay", module: "SM322" },
   { addr: "Q0.1", tag: "ALARM_H1",  desc: "报警灯",     type: "DO", wiring: "24VDC", module: "SM322" },
   { addr: "Q0.2", tag: "IND_H2",    desc: "运行指示",   type: "DO", wiring: "24VDC", module: "SM322" },
+  { addr: "Q0.3", tag: "CPU_HB",    desc: "CPU 心跳灯", type: "DO", wiring: "24VDC", module: "SM322" },
   { addr: "AIW0", tag: "TEMP_PT100",desc: "温度传感器",  type: "AI", wiring: "4-20mA",module: "SM331" },
   { addr: "AIW2", tag: "PRESS",     desc: "压力变送器",  type: "AI", wiring: "4-20mA",module: "SM331" },
   { addr: "AQW0", tag: "VFD_REF",   desc: "变频器给定",  type: "AO", wiring: "0-10V", module: "SM332" },
@@ -516,6 +547,7 @@ const IOView = ({ ioState, onToggle }) => (
         {IO_DEFS.map((io, i) => {
           const val = ioState[io.addr];
           const isDig = io.type === "DI" || io.type === "DO";
+          const canToggle = io.type === "DI";
           return (
             <tr key={io.addr} style={{
               borderBottom: "1px solid var(--border)",
@@ -550,7 +582,7 @@ const IOView = ({ ioState, onToggle }) => (
                     fontFamily: "var(--font-display)", fontSize: 10, padding: "3px 14px",
                     letterSpacing: 1, transition: "all 0.15s",
                     boxShadow: val ? "0 0 8px var(--green-glow)" : "none",
-                  }}>{val ? "ON" : "OFF"}</button>
+                  }} disabled={!canToggle}>{val ? "ON" : "OFF"}</button>
                 ) : (
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <div style={{ width: 64, height: 6, background: "var(--bg-raised)", borderRadius: 3, overflow: "hidden" }}>
@@ -565,6 +597,22 @@ const IOView = ({ ioState, onToggle }) => (
         })}
       </tbody>
     </table>
+  </div>
+);
+
+const DiagnosticView = ({ events }) => (
+  <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-mono)" }}>
+    {events.length === 0 && <div style={{ color: "var(--text-dim)", fontSize: 12 }}>暂无事件，等待扫描周期触发...</div>}
+    {events.map((evt, idx) => (
+      <div key={`${evt.ts}-${idx}`} style={{
+        display: "grid", gridTemplateColumns: "170px 100px 1fr", gap: 10,
+        border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px",
+      }}>
+        <code style={{ color: "var(--cyan)", fontSize: 11 }}>{evt.ts}</code>
+        <code style={{ color: evt.level === "FAULT" ? "var(--red)" : "var(--amber)", fontSize: 11 }}>{evt.level}</code>
+        <span style={{ color: "var(--text-primary)", fontSize: 12 }}>{evt.msg}</span>
+      </div>
+    ))}
   </div>
 );
 
@@ -707,7 +755,7 @@ const CourseView = () => {
 
 // ─── Timing Diagram ────────────────────────────────────────────────────────
 // I0.0/I0.1/Q0.0/Q0.1/Q0.2 接入真实 ioState；T1.IN 仍用随机仿真
-const TimingView = ({ running, ioState }) => {
+const TimingView = ({ running, ioState, scanInterval }) => {
   const SIGNALS = ["I0.0", "I0.1", "Q0.0", "Q0.1", "Q0.2", "T1.IN"];
   // 哪些信号直接从 ioState 读取（真实值）
   const REAL_SIGS = new Set(["I0.0", "I0.1", "Q0.0", "Q0.1", "Q0.2"]);
@@ -729,7 +777,7 @@ const TimingView = ({ running, ioState }) => {
       const last = sig[sig.length - 1];
       return [...sig.slice(1), Math.random() < 0.08 ? 1 - last : last];
     }));
-  }, 100);
+  }, scanInterval);
 
   const step = WIDTH / SAMPLES;
   const H = 30;
@@ -783,10 +831,15 @@ export default function App() {
   const [running, setRunning] = useState(true);
   const [scanCount, setScanCount] = useState(0);
   const [scanTime, setScanTime] = useState(8.4);
+  const [scanInterval, setScanInterval] = useState(100);
+  const [events, setEvents] = useState([]);
+  const prevFaultRef = useRef(false);
+  const prevRunRef = useRef(false);
   const [ioState, setIoState] = useState({
     // 初始状态：I0.1(停止按钮)=false 表示未按下，符合实际接线逻辑
     "I0.0": false, "I0.1": false, "I0.2": false, "I0.3": false,
-    "I1.0": false, "Q0.0": false, "Q0.1": false, "Q0.2": false,
+    "I1.0": false, "Q0.0": false, "Q0.1": false, "Q0.2": false, "Q0.3": false,
+    "M0.0": false,
     "AIW0": 0.62, "AIW2": 0.35, "AQW0": 0.50,
   });
 
@@ -798,21 +851,59 @@ export default function App() {
       setIoState(prev => {
         const next = runPLCScan(prev);
         // 浅比较：仅输出位变化时才触发 re-render，避免无意义扫描
-        const changed = ["Q0.0","Q0.1","Q0.2"].some(k => next[k] !== prev[k]);
+        const changed = ["Q0.0","Q0.1","Q0.2","Q0.3","M0.0"].some(k => next[k] !== prev[k]);
         return changed ? next : prev;
       });
-    }, 100);
+    }, scanInterval);
     return () => clearInterval(id);
-  }, [running]);
+  }, [running, scanInterval]);
+
+  useEffect(() => {
+    const nowFault = !!ioState["M0.0"];
+    const nowRun = !!ioState["Q0.0"];
+    const prevFault = prevFaultRef.current;
+    const prevRun = prevRunRef.current;
+
+    if (nowFault !== prevFault || nowRun !== prevRun) {
+      const entries = [];
+      if (nowFault !== prevFault) {
+        entries.push({
+          ts: new Date().toLocaleTimeString("zh-CN"),
+          level: nowFault ? "FAULT" : "INFO",
+          msg: nowFault ? "故障激活：急停或热继电器动作，主回路断开" : "故障复位：系统恢复就绪，可重新启动",
+        });
+      }
+      if (nowRun !== prevRun) {
+        entries.push({
+          ts: new Date().toLocaleTimeString("zh-CN"),
+          level: "INFO",
+          msg: nowRun ? "接触器吸合：电机运行中" : "接触器释放：电机停止",
+        });
+      }
+      if (entries.length) {
+        setEvents(prev => [...entries, ...prev].slice(0, 40));
+      }
+      prevFaultRef.current = nowFault;
+      prevRunRef.current = nowRun;
+    }
+  }, [ioState]);
 
   useInterval(() => {
     if (!running) return;
     setScanCount(c => c + 1);
     setScanTime(7.8 + Math.random() * 1.2);
-  }, 100);
+  }, scanInterval);
 
   const toggleIO = useCallback((addr) => {
+    if (!addr.startsWith("I")) return;
     setIoState(prev => ({ ...prev, [addr]: !prev[addr] }));
+  }, []);
+
+  const resetSystem = useCallback(() => {
+    setIoState(prev => ({ ...prev, "I0.2": false, "I1.0": false, "I0.3": true }));
+    setTimeout(() => {
+      setIoState(prev => ({ ...prev, "I0.3": false }));
+    }, 150);
   }, []);
 
   const contentMap = {
@@ -820,13 +911,22 @@ export default function App() {
     io:     <IOView ioState={ioState} onToggle={toggleIO} />,
     memory: <MemoryView running={running} />,
     course: <CourseView />,
-    timing: <TimingView running={running} ioState={ioState} />,
+    timing: <TimingView running={running} ioState={ioState} scanInterval={scanInterval} />,
+    diag:   <DiagnosticView events={events} />,
   };
 
   return (
     <div className="plc-root" style={{ height: "100vh", display: "flex", flexDirection: "column" }}>
       <GlobalStyles />
-      <TopBar scanCount={scanCount} scanTime={scanTime} running={running} onToggle={() => setRunning(r => !r)} />
+      <TopBar
+        scanCount={scanCount}
+        scanTime={scanTime}
+        running={running}
+        onToggle={() => setRunning(r => !r)}
+        scanInterval={scanInterval}
+        onIntervalChange={setScanInterval}
+        onReset={resetSystem}
+      />
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <Sidebar active={tab} onChange={setTab} />
         <div style={{ flex: 1, overflow: "auto" }}>
