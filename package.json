@@ -1,0 +1,13 @@
+{
+  "name": "plc-learning-code",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start:api": "node server.js",
+    "import:bili": "node scripts/bilibili_import_example.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  }
+}
