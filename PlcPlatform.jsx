@@ -152,6 +152,7 @@ const runPLCScan = (state) => {
 
 // ─── Top Bar ───────────────────────────────────────────────────────────────
 const TopBar = ({ scanCount, scanTime, running, onToggle, scanInterval, onIntervalChange, onReset, backendOnline }) => {
+const TopBar = ({ scanCount, scanTime, running, onToggle, scanInterval, onIntervalChange, onReset }) => {
   const [time, setTime] = useState(new Date());
   useInterval(() => setTime(new Date()), 1000);
 
@@ -191,6 +192,23 @@ const TopBar = ({ scanCount, scanTime, running, onToggle, scanInterval, onInterv
         <StatusBadge label="扫描计数" value={scanCount.toLocaleString()} color="var(--amber)" />
         <StatusBadge label="CPU 状态" value={running ? "RUN" : "STOP"} color={running ? "var(--green)" : "var(--red)"} blink={!running} />
         <StatusBadge label="后端" value={backendOnline ? "API ONLINE" : "API OFFLINE"} color={backendOnline ? "var(--green)" : "var(--red)"} blink={!backendOnline} />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {[50, 100, 200].map((ms) => (
+            <button key={ms} onClick={() => onIntervalChange(ms)} style={{
+              fontFamily: "var(--font-display)", fontSize: 10, padding: "4px 8px",
+              border: "1px solid var(--border)",
+              color: scanInterval === ms ? "var(--amber)" : "var(--text-dim)",
+              background: scanInterval === ms ? "var(--amber-glow)" : "transparent",
+              cursor: "pointer",
+            }}>{ms}ms</button>
+          ))}
+          <button onClick={onReset} style={{
+            fontFamily: "var(--font-display)", fontSize: 11, fontWeight: 700,
+            padding: "6px 12px", border: "1px solid var(--border)", color: "var(--amber)",
+            background: "var(--bg-raised)", cursor: "pointer", letterSpacing: 1,
+          }}>RESET</button>
+        </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {[50, 100, 200].map((ms) => (
@@ -933,6 +951,7 @@ export default function App() {
     io:     <IOView ioState={ioState} onToggle={toggleIO} />,
     memory: <MemoryView running={running} />,
     course: <CourseView courses={courses} loading={loadingCourses} error={courseError} onReload={refreshCourses} />,
+    course: <CourseView />,
     timing: <TimingView running={running} ioState={ioState} scanInterval={scanInterval} />,
     diag:   <DiagnosticView events={events} />,
   };
